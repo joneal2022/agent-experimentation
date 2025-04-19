@@ -1,0 +1,10 @@
+graph TD
+    A[CSV/Excel Upload] --> B(Data Validation Agent)
+    B --> C{Data Type?}
+    C -->|Structured| D[PostgreSQL Storage]
+    C -->|Unstructured| E[ChromaDB Vector Store]
+    D --> F[Metric Calculation Agent]
+    E --> G[Semantic Search Agent]
+    F --> H[Dashboard Generator]
+    G --> H
+    H --> I[Interactive Web UI]
