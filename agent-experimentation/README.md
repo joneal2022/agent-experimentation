@@ -217,11 +217,14 @@ This system provides CEOs and executives with a comprehensive, real-time view of
 - [x] AI-powered analysis for stalled tickets, overdue work, failed deployments
 - [x] Business intelligence service with executive risk assessment
 
-### 🔄 Phase 3 In Progress (Frontend & API)
-- [ ] FastAPI REST endpoints
-- [ ] React frontend dashboard
-- [ ] Real-time WebSocket updates
-- [ ] User authentication and roles
+### ✅ Phase 3 Complete (Executive Dashboard & Frontend)
+- [x] FastAPI REST endpoints with health and config routes
+- [x] React frontend dashboard structure
+- [x] Simplified configuration management with robust error handling
+- [x] Frontend-backend communication setup
+- [x] One-command startup script for seamless deployment
+- [ ] Real-time WebSocket updates (Phase 4)
+- [ ] User authentication and roles (Phase 4)
 
 ### 🔧 Phase 4 Planned (Advanced Features)
 - [ ] Predictive analytics
@@ -253,45 +256,95 @@ This system provides CEOs and executives with a comprehensive, real-time view of
 
 ### Prerequisites
 - Python 3.9+
-- PostgreSQL 13+
-- Redis 6+
+- Node.js 16+ and npm
 - JIRA, Confluence, and Tempo API access
 
-### Installation
-1. **Clone and Setup**
+### Quick Start (Phase 3 - Executive Dashboard)
+
+1. **Clone Repository**
    ```bash
    git clone <repository-url>
    cd agent-experimentation
-   pip install -r requirements.txt
    ```
 
 2. **Environment Configuration**
    ```bash
-   cp .env.template .env
-   # Edit .env with your API credentials and settings
+   cp .env.example .env
+   # Edit .env with your API credentials (see configuration section below)
    ```
 
-3. **Database Setup**
+3. **One-Command Startup**
    ```bash
-   # Create PostgreSQL database
-   createdb project_management
+   ./start_phase3.sh
+   ```
    
-   # Start Redis
-   redis-server
+   This script will:
+   - Create Python virtual environment
+   - Install all dependencies
+   - Start backend server (port 8000)
+   - Start React frontend (port 3000)
+   - Display access URLs
+
+4. **Access the Application**
+   - **Frontend Dashboard:** http://localhost:3000
+   - **Backend API:** http://localhost:8000/health
+   - **API Documentation:** http://localhost:8000/docs
+
+### Manual Installation (Alternative)
+
+If you prefer manual setup:
+
+1. **Backend Setup**
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate
+   pip install -r requirements-minimal.txt
+   python simple_main.py &
    ```
 
-4. **Run Application**
+2. **Frontend Setup**
    ```bash
-   python main.py
+   cd frontend
+   npm install --legacy-peer-deps
+   unset HOST  # Important: Avoids React dev server conflicts
+   npm start
    ```
 
 ### Configuration
+
 Update `.env` file with your credentials:
-- JIRA API credentials and URL
-- Confluence API credentials and URL  
-- Tempo API token
-- OpenAI API key
-- Database connection details
+
+**Required API Keys:**
+- `JIRA_URL`: Your Atlassian JIRA URL (e.g., https://yourcompany.atlassian.net)
+- `JIRA_USERNAME`: Your Atlassian email
+- `JIRA_API_TOKEN`: Your JIRA API token
+- `CONFLUENCE_URL`: Your Confluence URL (e.g., https://yourcompany.atlassian.net/wiki)
+- `CONFLUENCE_USERNAME`: Your Atlassian email (same as JIRA)
+- `CONFLUENCE_API_TOKEN`: Your Confluence API token (can be same as JIRA)
+- `TEMPO_API_TOKEN`: Your Tempo API token
+- `OPENAI_API_KEY`: Your OpenAI API key
+
+**Important Notes:**
+- Comment out `HOST=0.0.0.0` in .env to avoid React dev server conflicts
+- The application uses port 8000 for backend and 3000 for frontend
+- All API keys must be configured for full functionality
+
+### Troubleshooting
+
+**React Server Won't Start:**
+- Ensure `HOST` environment variable is not set
+- Use `unset HOST` before running `npm start`
+- Install dependencies with `--legacy-peer-deps` flag
+
+**Backend Configuration Errors:**
+- Check that all required API keys are set in `.env`
+- Ensure OpenAI API key is valid and has credits
+- Verify Atlassian API tokens have proper permissions
+
+**Port Conflicts:**
+- Backend runs on port 8000, frontend on port 3000
+- Kill existing processes: `pkill -f "python\|npm"`
+- Use the provided startup script for automatic cleanup
 
 ## 📈 Business Value
 

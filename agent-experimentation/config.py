@@ -21,6 +21,8 @@ class DatabaseSettings(BaseSettings):
     
     chromadb_path: str = Field(default="./chromadb", env="CHROMADB_PATH")
     
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
+    
     @property
     def postgres_url(self) -> str:
         return f"postgresql://{self.postgres_user}:{self.postgres_password}@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
@@ -32,50 +34,60 @@ class DatabaseSettings(BaseSettings):
 
 class AtlassianSettings(BaseSettings):
     """Atlassian API configuration"""
-    jira_url: str = Field(env="JIRA_URL")
-    jira_username: str = Field(env="JIRA_USERNAME")
-    jira_api_token: str = Field(env="JIRA_API_TOKEN")
+    jira_url: str = Field(default="", env="JIRA_URL")
+    jira_username: str = Field(default="", env="JIRA_USERNAME")
+    jira_api_token: str = Field(default="", env="JIRA_API_TOKEN")
     
-    confluence_url: str = Field(env="CONFLUENCE_URL")
-    confluence_username: str = Field(env="CONFLUENCE_USERNAME")
-    confluence_api_token: str = Field(env="CONFLUENCE_API_TOKEN")
+    confluence_url: str = Field(default="", env="CONFLUENCE_URL")
+    confluence_username: str = Field(default="", env="CONFLUENCE_USERNAME")
+    confluence_api_token: str = Field(default="", env="CONFLUENCE_API_TOKEN")
     
-    tempo_api_token: str = Field(env="TEMPO_API_TOKEN")
+    tempo_api_token: str = Field(default="", env="TEMPO_API_TOKEN")
+    
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 class OpenAISettings(BaseSettings):
     """OpenAI API configuration"""
-    api_key: str = Field(env="OPENAI_API_KEY")
+    api_key: str = Field(default="", env="OPENAI_API_KEY")
     model: str = Field(default="gpt-4o-mini", env="OPENAI_MODEL")
     max_tokens: int = Field(default=1000, env="OPENAI_MAX_TOKENS")
     temperature: float = Field(default=0.1, env="OPENAI_TEMPERATURE")
+    
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 class SchedulingSettings(BaseSettings):
     """Scheduling configuration"""
     ingestion_time: str = Field(default="06:00", env="INGESTION_TIME")  # Daily at 6 AM
     timezone: str = Field(default="UTC", env="TIMEZONE")
+    
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 class AlertSettings(BaseSettings):
     """Alert system configuration"""
     email_smtp_host: str = Field(default="smtp.gmail.com", env="EMAIL_SMTP_HOST")
     email_smtp_port: int = Field(default=587, env="EMAIL_SMTP_PORT")
-    email_username: str = Field(env="EMAIL_USERNAME")
-    email_password: str = Field(env="EMAIL_PASSWORD")
-    email_from: str = Field(env="EMAIL_FROM")
+    email_username: str = Field(default="", env="EMAIL_USERNAME")
+    email_password: str = Field(default="", env="EMAIL_PASSWORD")
+    email_from: str = Field(default="", env="EMAIL_FROM")
     
     slack_webhook_url: Optional[str] = Field(default=None, env="SLACK_WEBHOOK_URL")
     
     # Alert thresholds
     stalled_ticket_days: int = Field(default=5, env="STALLED_TICKET_DAYS")
+    
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 class SecuritySettings(BaseSettings):
     """Security configuration"""
-    jwt_secret_key: str = Field(env="JWT_SECRET_KEY")
+    jwt_secret_key: str = Field(default="dev_secret_key", env="JWT_SECRET_KEY")
     jwt_algorithm: str = Field(default="HS256", env="JWT_ALGORITHM")
     jwt_expire_minutes: int = Field(default=30, env="JWT_EXPIRE_MINUTES")
+    
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 class AppSettings(BaseSettings):
@@ -85,21 +97,21 @@ class AppSettings(BaseSettings):
     host: str = Field(default="0.0.0.0", env="HOST")
     port: int = Field(default=8000, env="PORT")
     cors_origins: List[str] = Field(default=["http://localhost:3000", "http://localhost:8080"], env="CORS_ORIGINS")
+    
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 class Settings(BaseSettings):
     """Combined settings"""
-    database: DatabaseSettings = DatabaseSettings()
-    atlassian: AtlassianSettings = AtlassianSettings()
-    openai: OpenAISettings = OpenAISettings()
-    scheduling: SchedulingSettings = SchedulingSettings()
-    alerts: AlertSettings = AlertSettings()
-    security: SecuritySettings = SecuritySettings()
-    app: AppSettings = AppSettings()
+    database: DatabaseSettings = Field(default_factory=DatabaseSettings)
+    atlassian: AtlassianSettings = Field(default_factory=AtlassianSettings)
+    openai: OpenAISettings = Field(default_factory=OpenAISettings)
+    scheduling: SchedulingSettings = Field(default_factory=SchedulingSettings)
+    alerts: AlertSettings = Field(default_factory=AlertSettings)
+    security: SecuritySettings = Field(default_factory=SecuritySettings)
+    app: AppSettings = Field(default_factory=AppSettings)
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 # Global settings instance
