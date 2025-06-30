@@ -81,8 +81,16 @@ class ConfluenceMCPConnector:
                 page_info = await self._extract_page_data(page, space_key)
                 
                 # Filter by date if specified
-                if page_info.get('updated_date') and page_info['updated_date'] > cutoff_date:
-                    page_data.append(page_info)
+                if page_info.get('updated_date'):
+                    # Ensure both dates are timezone-naive for comparison
+                    updated_date = page_info['updated_date']
+                    if updated_date.tzinfo is not None:
+                        updated_date = updated_date.replace(tzinfo=None)
+                    
+                    cutoff_naive = cutoff_date.replace(tzinfo=None) if cutoff_date.tzinfo else cutoff_date
+                    
+                    if updated_date > cutoff_naive:
+                        page_data.append(page_info)
                 elif days_back is None:  # Include all pages if no date filter
                     page_data.append(page_info)
             

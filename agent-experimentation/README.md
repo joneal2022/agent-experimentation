@@ -259,7 +259,7 @@ This system provides CEOs and executives with a comprehensive, real-time view of
 - Node.js 16+ and npm
 - JIRA, Confluence, and Tempo API access
 
-### Quick Start (Phase 3 - Executive Dashboard)
+### 🚀 Quick Start (Recommended)
 
 1. **Clone Repository**
    ```bash
@@ -269,20 +269,20 @@ This system provides CEOs and executives with a comprehensive, real-time view of
 
 2. **Environment Configuration**
    ```bash
-   cp .env.example .env
+   cp .env.template .env
    # Edit .env with your API credentials (see configuration section below)
    ```
 
-3. **One-Command Startup**
+3. **Quick Start with Script**
    ```bash
-   ./start_phase3.sh
+   ./start.sh
    ```
    
    This script will:
    - Create Python virtual environment
-   - Install all dependencies
-   - Start backend server (port 8000)
-   - Start React frontend (port 3000)
+   - Install all dependencies (Python + Node.js)
+   - Start backend server on port 8000
+   - Start React frontend on port 3000
    - Display access URLs
 
 4. **Access the Application**
@@ -296,55 +296,81 @@ If you prefer manual setup:
 
 1. **Backend Setup**
    ```bash
+   # Create and activate virtual environment
    python3 -m venv venv
    source venv/bin/activate
-   pip install -r requirements-minimal.txt
-   python simple_main.py &
+   
+   # Install dependencies
+   pip install -r requirements.txt
+   
+   # Start backend
+   python main.py
    ```
 
-2. **Frontend Setup**
+2. **Frontend Setup** (in separate terminal)
    ```bash
    cd frontend
-   npm install --legacy-peer-deps
-   unset HOST  # Important: Avoids React dev server conflicts
+   npm install
    npm start
    ```
 
-### Configuration
+### ⚙️ Configuration
 
-Update `.env` file with your credentials:
+Create `.env` file from template and update with your credentials:
+
+```bash
+cp .env.template .env
+```
 
 **Required API Keys:**
 - `JIRA_URL`: Your Atlassian JIRA URL (e.g., https://yourcompany.atlassian.net)
 - `JIRA_USERNAME`: Your Atlassian email
-- `JIRA_API_TOKEN`: Your JIRA API token
+- `JIRA_API_TOKEN`: Your JIRA API token ([Generate here](https://id.atlassian.com/manage-profile/security/api-tokens))
 - `CONFLUENCE_URL`: Your Confluence URL (e.g., https://yourcompany.atlassian.net/wiki)
 - `CONFLUENCE_USERNAME`: Your Atlassian email (same as JIRA)
-- `CONFLUENCE_API_TOKEN`: Your Confluence API token (can be same as JIRA)
-- `TEMPO_API_TOKEN`: Your Tempo API token
-- `OPENAI_API_KEY`: Your OpenAI API key
+- `CONFLUENCE_API_TOKEN`: Your Confluence API token (same as JIRA token)
+- `TEMPO_API_TOKEN`: Your Tempo API token ([Generate in Tempo](https://tempo.io/doc/timesheets/api/rest/getting-started/#authentication))
+- `OPENAI_API_KEY`: Your OpenAI API key (optional, for AI features)
 
-**Important Notes:**
-- Comment out `HOST=0.0.0.0` in .env to avoid React dev server conflicts
-- The application uses port 8000 for backend and 3000 for frontend
-- All API keys must be configured for full functionality
+### 🔧 Troubleshooting
 
-### Troubleshooting
+**Frontend Issues:**
+```bash
+# If React server won't start, clear HOST variable:
+unset HOST
+cd frontend && npm start
 
-**React Server Won't Start:**
-- Ensure `HOST` environment variable is not set
-- Use `unset HOST` before running `npm start`
-- Install dependencies with `--legacy-peer-deps` flag
+# If dependencies fail:
+npm install --legacy-peer-deps
+```
 
-**Backend Configuration Errors:**
-- Check that all required API keys are set in `.env`
-- Ensure OpenAI API key is valid and has credits
-- Verify Atlassian API tokens have proper permissions
+**Backend Issues:**
+```bash
+# Check API connections:
+curl http://localhost:8000/health
+
+# View logs for debugging:
+python main.py
+
+# Restart with fresh environment:
+source venv/bin/activate
+python main.py
+```
 
 **Port Conflicts:**
-- Backend runs on port 8000, frontend on port 3000
-- Kill existing processes: `pkill -f "python\|npm"`
-- Use the provided startup script for automatic cleanup
+```bash
+# Kill existing processes:
+pkill -f "main.py"
+pkill -f "npm"
+
+# Or use the startup script which handles cleanup automatically
+./start.sh
+```
+
+**Configuration Issues:**
+- Ensure all API tokens are valid and have proper permissions
+- Check that URLs are correct (no trailing slashes)
+- Verify environment variables are loaded: `python -c "from config import settings; print(settings.atlassian.jira_url)"`
 
 ## 📈 Business Value
 

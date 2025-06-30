@@ -16,7 +16,7 @@ class TempoMCPConnector:
     """Enhanced Tempo connector with MCP integration"""
     
     def __init__(self):
-        self.base_url = "https://api.tempo.io/core/3"
+        self.base_url = "https://api.tempo.io/4"
         self.http_client = httpx.AsyncClient(
             timeout=30.0,
             headers={
@@ -36,7 +36,7 @@ class TempoMCPConnector:
             return True
             
         except Exception as e:
-            logger.error("Failed to connect to Tempo", error=str(e))
+            logger.error(f"Failed to connect to Tempo: {e}")
             return False
     
     async def fetch_worklogs(self, days_back: int = 30) -> List[Dict[str, Any]]:
@@ -89,19 +89,24 @@ class TempoMCPConnector:
     async def _extract_worklog_data(self, worklog: Dict[str, Any]) -> Dict[str, Any]:
         """Extract comprehensive data from a Tempo worklog"""
         try:
+            # Handle both dict and non-dict worklog objects
+            if not isinstance(worklog, dict):
+                logger.error("Invalid worklog data type", worklog_type=type(worklog), worklog_id=worklog)
+                return {}
+            
             worklog_data = {
                 'tempo_worklog_id': worklog.get('tempoWorklogId'),
-                'jira_ticket_key': worklog.get('issue', {}).get('key'),
-                'jira_ticket_id': worklog.get('issue', {}).get('id'),
+                'jira_ticket_key': worklog.get('issue', {}).get('key') if isinstance(worklog.get('issue'), dict) else None,
+                'jira_ticket_id': worklog.get('issue', {}).get('id') if isinstance(worklog.get('issue'), dict) else None,
                 'time_spent_seconds': worklog.get('timeSpentSeconds', 0),
                 'time_spent_hours': round(worklog.get('timeSpentSeconds', 0) / 3600, 2),
-                'billing_key': worklog.get('billableSeconds', {}).get('key') if worklog.get('billableSeconds') else None,
-                'author_account_id': worklog.get('author', {}).get('accountId'),
-                'author_display_name': worklog.get('author', {}).get('displayName'),
+                'billing_key': worklog.get('billableSeconds', {}).get('key') if isinstance(worklog.get('billableSeconds'), dict) else None,
+                'author_account_id': worklog.get('author', {}).get('accountId') if isinstance(worklog.get('author'), dict) else None,
+                'author_display_name': worklog.get('author', {}).get('displayName') if isinstance(worklog.get('author'), dict) else None,
                 'start_date': self._parse_tempo_date(worklog.get('startDate')),
                 'start_time': worklog.get('startTime'),
                 'description': worklog.get('description', ''),
-                'attributes': worklog.get('attributes', {}),
+                'attributes': worklog.get('attributes', {}) if isinstance(worklog.get('attributes'), dict) else {},
                 'raw_data': worklog
             }
             
@@ -109,7 +114,8 @@ class TempoMCPConnector:
             
         except Exception as e:
             logger.error("Failed to extract worklog data", 
-                        worklog_id=worklog.get('tempoWorklogId'), error=str(e))
+                        worklog_id=worklog.get('tempoWorklogId') if isinstance(worklog, dict) else str(worklog), 
+                        error=str(e))
             return {}
     
     async def fetch_teams(self) -> List[Dict[str, Any]]:
@@ -175,20 +181,31 @@ class TempoMCPConnector:
             response.raise_for_status()
             
             data = response.json()
-            accounts = data.get("results", [])
+            # Handle different response structures
+            if isinstance(data, list):
+                accounts = data
+            elif isinstance(data, dict):
+                accounts = data.get("results", data.get("values", []))
+            else:
+                logger.error("Unexpected accounts response format", data_type=type(data))
+                return []
             
             account_data = []
             for account in accounts:
+                if not isinstance(account, dict):
+                    logger.error("Invalid account data type", account_type=type(account))
+                    continue
+                    
                 account_info = {
                     'account_id': account.get('id'),
                     'account_key': account.get('key'),
                     'account_name': account.get('name'),
                     'status': account.get('status'),
-                    'customer': account.get('customer', {}).get('displayName') if account.get('customer') else None,
-                    'lead': account.get('lead', {}).get('displayName') if account.get('lead') else None,
+                    'customer': account.get('customer', {}).get('displayName') if isinstance(account.get('customer'), dict) else None,
+                    'lead': account.get('lead', {}).get('displayName') if isinstance(account.get('lead'), dict) else None,
                     'default_hourly_rate': account.get('defaultHourlyRate'),
                     'billing_type': 'BILLABLE' if account.get('billable') else 'NON_BILLABLE',
-                    'jira_project_keys': [link.get('projectKey') for link in account.get('links', [])],
+                    'jira_project_keys': [link.get('projectKey') for link in account.get('links', []) if isinstance(link, dict)],
                     'raw_data': account
                 }
                 account_data.append(account_info)

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ChartBarIcon, TrendingUpIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import { ChartBarIcon, ArrowTrendingUpIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import toast from 'react-hot-toast';
 
@@ -80,7 +80,7 @@ const Analytics: React.FC = () => {
               title="Utilization Score"
               value={`${businessMetrics.resource_metrics.utilization_score}/10`}
               subtitle="Team efficiency"
-              icon={TrendingUpIcon}
+              icon={ArrowTrendingUpIcon}
               color={businessMetrics.resource_metrics.utilization_score >= 8 ? 'green' : 
                     businessMetrics.resource_metrics.utilization_score >= 6 ? 'yellow' : 'red'}
               loading={loading}

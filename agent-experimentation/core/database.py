@@ -52,6 +52,11 @@ def get_chroma():
     return chroma_client
 
 
+def get_db_url():
+    """Get database URL for external connections"""
+    return settings.database.postgres_url
+
+
 async def init_db():
     """Initialize database tables"""
     try:

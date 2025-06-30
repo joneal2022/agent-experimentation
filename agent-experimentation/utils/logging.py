@@ -1,116 +1,52 @@
 """
-Logging configuration for the application
+Simple logging utilities for MCP dashboard
 """
 import logging
-import structlog
-from typing import Any, Dict
 import sys
-from pathlib import Path
+from typing import Any, Dict
 
-from config import settings
+# Configure basic logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
 
-
-def setup_logging():
-    """Setup structured logging for the application"""
+class EnhancedLogger:
+    """Enhanced logger that handles keyword arguments"""
     
-    # Configure structlog
-    structlog.configure(
-        processors=[
-            structlog.stdlib.filter_by_level,
-            structlog.stdlib.add_logger_name,
-            structlog.stdlib.add_log_level,
-            structlog.stdlib.PositionalArgumentsFormatter(),
-            structlog.processors.TimeStamper(fmt="iso"),
-            structlog.processors.StackInfoRenderer(),
-            structlog.processors.format_exc_info,
-            structlog.processors.UnicodeDecoder(),
-            structlog.processors.JSONRenderer() if not settings.app.debug else structlog.dev.ConsoleRenderer()
-        ],
-        context_class=dict,
-        logger_factory=structlog.stdlib.LoggerFactory(),
-        wrapper_class=structlog.stdlib.BoundLogger,
-        cache_logger_on_first_use=True,
-    )
+    def __init__(self, logger: logging.Logger):
+        self._logger = logger
     
-    # Configure standard logging
-    logging.basicConfig(
-        format="%(message)s",
-        stream=sys.stdout,
-        level=logging.DEBUG if settings.app.debug else logging.INFO,
-    )
+    def info(self, message: str, **kwargs):
+        extra_info = " ".join([f"{k}={v}" for k, v in kwargs.items()])
+        full_message = f"{message} {extra_info}".strip()
+        self._logger.info(full_message)
     
-    # Create logs directory if it doesn't exist
-    logs_dir = Path("logs")
-    logs_dir.mkdir(exist_ok=True)
+    def error(self, message: str, **kwargs):
+        extra_info = " ".join([f"{k}={v}" for k, v in kwargs.items()])
+        full_message = f"{message} {extra_info}".strip()
+        self._logger.error(full_message)
     
-    # Add file handler for production
-    if not settings.app.debug:
-        file_handler = logging.FileHandler("logs/app.log")
-        file_handler.setFormatter(logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        ))
-        logging.getLogger().addHandler(file_handler)
-
-
-def get_logger(name: str = None) -> structlog.BoundLogger:
-    """Get a structured logger instance"""
-    return structlog.get_logger(name)
-
-
-class LoggerMixin:
-    """Mixin class to add logging capabilities to any class"""
+    def warning(self, message: str, **kwargs):
+        extra_info = " ".join([f"{k}={v}" for k, v in kwargs.items()])
+        full_message = f"{message} {extra_info}".strip()
+        self._logger.warning(full_message)
     
-    @property
-    def logger(self) -> structlog.BoundLogger:
-        """Get logger for this class"""
-        return get_logger(self.__class__.__name__)
+    def debug(self, message: str, **kwargs):
+        extra_info = " ".join([f"{k}={v}" for k, v in kwargs.items()])
+        full_message = f"{message} {extra_info}".strip()
+        self._logger.debug(full_message)
 
+def get_logger(name: str) -> EnhancedLogger:
+    """Get a logger instance"""
+    base_logger = logging.getLogger(name)
+    return EnhancedLogger(base_logger)
 
-def log_api_request(method: str, path: str, **kwargs) -> Dict[str, Any]:
-    """Log API request with structured data"""
-    return {
-        "event": "api_request",
-        "method": method,
-        "path": path,
-        **kwargs
-    }
-
-
-def log_database_operation(operation: str, table: str, **kwargs) -> Dict[str, Any]:
-    """Log database operation with structured data"""
-    return {
-        "event": "database_operation",
-        "operation": operation,
-        "table": table,
-        **kwargs
-    }
-
-
-def log_ai_operation(model: str, operation: str, **kwargs) -> Dict[str, Any]:
-    """Log AI/ML operation with structured data"""
-    return {
-        "event": "ai_operation",
-        "model": model,
-        "operation": operation,
-        **kwargs
-    }
-
-
-def log_alert_triggered(alert_type: str, severity: str, **kwargs) -> Dict[str, Any]:
-    """Log alert trigger with structured data"""
-    return {
-        "event": "alert_triggered",
-        "alert_type": alert_type,
-        "severity": severity,
-        **kwargs
-    }
-
-
-def log_data_ingestion(source: str, records_processed: int, **kwargs) -> Dict[str, Any]:
-    """Log data ingestion with structured data"""
-    return {
-        "event": "data_ingestion",
-        "source": source,
-        "records_processed": records_processed,
-        **kwargs
-    }
+def log_data_ingestion(source: str, count: int, **kwargs):
+    """Log data ingestion events"""
+    logger = get_logger("data_ingestion")
+    extra_info = " ".join([f"{k}={v}" for k, v in kwargs.items()])
+    logger.info(f"Ingested {count} items from {source} {extra_info}")

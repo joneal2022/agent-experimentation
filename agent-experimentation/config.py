@@ -5,6 +5,10 @@ import os
 from typing import List, Optional
 from pydantic_settings import BaseSettings
 from pydantic import Field
+from dotenv import load_dotenv
+
+# Force reload .env file to ensure fresh configuration
+load_dotenv('.env', override=True)
 
 
 class DatabaseSettings(BaseSettings):

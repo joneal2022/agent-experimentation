@@ -6,11 +6,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from jira import JIRA
 import httpx
-from sqlalchemy.orm import Session
-
 from config import settings
-from core.database import get_db
-from models.jira import JiraProject, JiraTicket, JiraComment, JiraStatusHistory, JiraWorklog
 from utils.logging import get_logger, log_data_ingestion
 
 logger = get_logger(__name__)
@@ -40,7 +36,7 @@ class JiraMCPConnector:
             return True
             
         except Exception as e:
-            logger.error("Failed to connect to JIRA", error=str(e))
+            logger.error(f"Failed to connect to JIRA: {e}")
             return False
     
     async def fetch_all_projects(self) -> List[Dict[str, Any]]:
@@ -74,7 +70,8 @@ class JiraMCPConnector:
             since_date = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
             
             # JQL query to get tickets updated in the last N days
-            jql = f'project = {project_key} AND updated >= "{since_date}" ORDER BY updated DESC'
+            # Quote project key to handle special characters and reserved words
+            jql = f'project = "{project_key}" AND updated >= "{since_date}" ORDER BY updated DESC'
             
             issues = self.client.search_issues(
                 jql,
@@ -121,14 +118,17 @@ class JiraMCPConnector:
             # Analyze current status duration
             ticket_data['days_in_current_status'] = await self._calculate_days_in_status(issue)
             ticket_data['is_overdue'] = self._check_if_overdue(ticket_data)
-            ticket_data['is_stalled'] = ticket_data['days_in_current_status'] > settings.alerts.stalled_ticket_days
+            ticket_data['is_stalled'] = ticket_data['days_in_current_status'] > 5  # stalled_ticket_days
             ticket_data['level_ii_failed'] = 'level ii test failed' in ticket_data['status'].lower()
             
             # Extract comments
             ticket_data['comments'] = await self._extract_comments(issue)
             
-            # Extract status history
-            ticket_data['status_history'] = await self._extract_status_history(issue)
+            # Extract status history (only if changelog is available)
+            if hasattr(issue, 'changelog') and hasattr(issue.changelog, 'histories'):
+                ticket_data['status_history'] = await self._extract_status_history(issue)
+            else:
+                ticket_data['status_history'] = []
             
             # Extract worklogs
             ticket_data['worklogs'] = await self._extract_worklogs(issue)
@@ -163,16 +163,18 @@ class JiraMCPConnector:
         """Extract status change history from a JIRA ticket"""
         status_history = []
         try:
-            for history in issue.changelog.histories:
-                for item in history.items:
-                    if item.field == 'status':
-                        status_change = {
-                            'from_status': item.fromString,
-                            'to_status': item.toString,
-                            'changed_by': history.author.displayName,
-                            'changed_at': self._parse_jira_date(history.created),
-                        }
-                        status_history.append(status_change)
+            # Check if changelog is available and properly expanded
+            if hasattr(issue, 'changelog') and hasattr(issue.changelog, 'histories'):
+                for history in issue.changelog.histories:
+                    for item in history.items:
+                        if item.field == 'status':
+                            status_change = {
+                                'from_status': item.fromString,
+                                'to_status': item.toString,
+                                'changed_by': history.author.displayName,
+                                'changed_at': self._parse_jira_date(history.created),
+                            }
+                            status_history.append(status_change)
         except Exception as e:
             logger.error("Failed to extract status history", 
                         ticket_key=issue.key, error=str(e))
@@ -206,20 +208,31 @@ class JiraMCPConnector:
         try:
             # Get the most recent status change from changelog
             latest_status_change = None
-            for history in reversed(issue.changelog.histories):
-                for item in history.items:
-                    if item.field == 'status' and item.toString == issue.fields.status.name:
-                        latest_status_change = self._parse_jira_date(history.created)
-                        break
-                if latest_status_change:
-                    break
             
+            # Check if changelog is available and properly expanded
+            if hasattr(issue, 'changelog') and hasattr(issue.changelog, 'histories'):
+                for history in reversed(issue.changelog.histories):
+                    for item in history.items:
+                        if item.field == 'status' and item.toString == issue.fields.status.name:
+                            latest_status_change = self._parse_jira_date(history.created)
+                            break
+                    if latest_status_change:
+                        break
+            
+            # Make datetime.now() timezone aware
+            now = datetime.now()
             if latest_status_change:
-                return (datetime.now() - latest_status_change).days
+                if latest_status_change.tzinfo is not None:
+                    # Convert to naive datetime for comparison
+                    latest_status_change = latest_status_change.replace(tzinfo=None)
+                return (now - latest_status_change).days
             else:
-                # If no status change found, use created date
-                created_date = self._parse_jira_date(issue.fields.created)
-                return (datetime.now() - created_date).days
+                # If no status change found, use updated date (most recent activity)
+                updated_date = self._parse_jira_date(issue.fields.updated)
+                if updated_date and updated_date.tzinfo is not None:
+                    # Convert to naive datetime for comparison
+                    updated_date = updated_date.replace(tzinfo=None)
+                return (now - updated_date).days if updated_date else 1
                 
         except Exception as e:
             logger.error("Failed to calculate days in status", 
