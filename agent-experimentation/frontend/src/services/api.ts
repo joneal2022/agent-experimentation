@@ -1,10 +1,14 @@
 import axios from 'axios';
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+// In development, use relative URLs to leverage CRA's proxy
+// In production, use the full API URL
+const API_BASE_URL = process.env.NODE_ENV === 'production' 
+  ? (process.env.REACT_APP_API_URL || 'http://localhost:8000')
+  : '';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 30000,
+  timeout: 120000, // Increased to 2 minutes for initial data loads
   headers: {
     'Content-Type': 'application/json',
   },

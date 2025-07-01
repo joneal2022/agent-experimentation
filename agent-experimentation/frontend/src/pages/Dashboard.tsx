@@ -36,16 +36,30 @@ const Dashboard: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
-  const loadDashboardData = async () => {
+  const loadDashboardData = async (retryCount = 0) => {
     try {
+      console.log('Loading dashboard data...');
       const data = await dashboardService.getExecutiveSummary();
       setDashboardData(data);
       setLastRefresh(new Date());
+      console.log('Dashboard data loaded successfully');
     } catch (error) {
       console.error('Failed to load dashboard data:', error);
-      toast.error('Failed to load dashboard data');
+      
+      // Retry up to 2 times with increasing delays
+      if (retryCount < 2) {
+        const delay = (retryCount + 1) * 5000; // 5s, 10s delays
+        console.log(`Retrying in ${delay/1000}s... (attempt ${retryCount + 1}/2)`);
+        setTimeout(() => loadDashboardData(retryCount + 1), delay);
+        return;
+      }
+      
+      // Show error only after retries exhausted
+      toast.error('Failed to load dashboard data. Please refresh the page.');
     } finally {
-      setLoading(false);
+      if (retryCount === 0) {
+        setLoading(false);
+      }
     }
   };
 

@@ -298,23 +298,33 @@ class ConfluenceMCPConnector:
     async def extract_deployment_records(self, space_key: str = None) -> List[Dict[str, Any]]:
         """Extract deployment information from Confluence"""
         try:
-            # Search for deployment pages
-            search_query = 'title:"Deployment" OR title:"Deploy" OR content:"DONE" OR content:"DEPLOYED TO PROD"'
+            # Search for deployment pages with proper CQL syntax
+            search_query = 'title ~ "Deployment" OR title ~ "Deploy" OR text ~ "DONE" OR text ~ "DEPLOYED TO PROD"'
             if space_key:
-                search_query += f' AND space:{space_key}'
+                search_query += f' AND space = "{space_key}"'
             
             search_results = self.client.cql(search_query, limit=100)
             deployments = []
             
             for result in search_results['results']:
-                page_content = self.client.get_page_by_id(
-                    result['id'], 
-                    expand='body.storage,version'
-                )
-                
-                deployment_data = await self._parse_deployment_content(page_content)
-                if deployment_data:
-                    deployments.append(deployment_data)
+                try:
+                    # Handle different result structures
+                    page_id = result.get('content', {}).get('id') or result.get('id')
+                    if not page_id:
+                        logger.warning("No page ID found in result", result_keys=list(result.keys()))
+                        continue
+                    
+                    page_content = self.client.get_page_by_id(
+                        page_id, 
+                        expand='body.storage,version'
+                    )
+                    
+                    deployment_data = await self._parse_deployment_content(page_content)
+                    if deployment_data:
+                        deployments.append(deployment_data)
+                except Exception as e:
+                    logger.warning("Failed to process deployment search result", error=str(e))
+                    continue
             
             logger.info("Extracted deployment records", count=len(deployments))
             return deployments
