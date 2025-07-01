@@ -45,6 +45,7 @@ const Tickets: React.FC = () => {
   const [tickets, setTickets] = useState<TicketsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [projectsData, setProjectsData] = useState<{[key: string]: string}>({});
   const [filters, setFilters] = useState({
     project: '',
     status: '',
@@ -55,9 +56,31 @@ const Tickets: React.FC = () => {
     failed_testing_only: false,
   });
 
+  // Dynamic project name lookup using data from backend
+  const getProjectName = (projectKey: string): string => {
+    return projectsData[projectKey] || projectKey;
+  };
+
   useEffect(() => {
     loadTickets();
-  }, [filters]);
+    loadProjects();
+  }, [filters]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const loadProjects = async () => {
+    try {
+      const response = await api.get('/api/jira/projects');
+      const projectsMap: {[key: string]: string} = {};
+      
+      response.data.projects?.forEach((project: any) => {
+        projectsMap[project.key] = project.name;
+      });
+      
+      setProjectsData(projectsMap);
+    } catch (error) {
+      console.error('Failed to load projects:', error);
+      // Fall back to empty object, will use project key as name
+    }
+  };
 
   const loadTickets = async () => {
     try {
@@ -322,6 +345,9 @@ const Tickets: React.FC = () => {
                     Ticket
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Project
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Summary
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -351,10 +377,15 @@ const Tickets: React.FC = () => {
                           <div className="text-sm font-medium text-primary-600">
                             {ticket.ticket_key}
                           </div>
-                          <div className="text-sm text-gray-500">
-                            {ticket.project_key}
-                          </div>
                         </div>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm font-medium text-gray-900">
+                        {getProjectName(ticket.project_key)}
+                      </div>
+                      <div className="text-sm text-gray-500">
+                        {ticket.project_key}
                       </div>
                     </td>
                     <td className="px-6 py-4">

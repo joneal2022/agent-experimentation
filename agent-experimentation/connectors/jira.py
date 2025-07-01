@@ -97,9 +97,19 @@ class JiraMCPConnector:
     async def _extract_ticket_data(self, issue) -> Dict[str, Any]:
         """Extract comprehensive data from a JIRA ticket"""
         try:
+            # Extract project key with fallback
+            project_key = None
+            try:
+                project_key = issue.fields.project.key
+            except AttributeError:
+                # Fallback: extract project key from ticket key (e.g., "PIH-233" -> "PIH")
+                project_key = issue.key.split('-')[0] if '-' in issue.key else issue.key
+            
             # Basic ticket information
             ticket_data = {
                 'key': issue.key,
+                'ticket_key': issue.key,  # Also provide as ticket_key for compatibility
+                'project_key': project_key,  # Extract project key separately with fallback
                 'summary': issue.fields.summary,
                 'description': getattr(issue.fields, 'description', ''),
                 'issue_type': issue.fields.issuetype.name,
@@ -119,7 +129,7 @@ class JiraMCPConnector:
             ticket_data['days_in_current_status'] = await self._calculate_days_in_status(issue)
             ticket_data['is_overdue'] = self._check_if_overdue(ticket_data)
             ticket_data['is_stalled'] = ticket_data['days_in_current_status'] > 5  # stalled_ticket_days
-            ticket_data['level_ii_failed'] = 'level ii test failed' in ticket_data['status'].lower()
+            ticket_data['level_ii_failed'] = 'level ii test failed' in (ticket_data['status'] or '').lower()
             
             # Extract comments
             ticket_data['comments'] = await self._extract_comments(issue)

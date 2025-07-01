@@ -46,6 +46,11 @@ mcp_data_cache = {
 }
 mcp_cache_expiry = None
 
+# Background refresh control to prevent infinite loops
+background_refresh_running = False
+last_refresh_attempt = None
+refresh_cooldown_minutes = 10  # Minimum time between refresh attempts
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize MCP connections on startup"""
@@ -151,13 +156,23 @@ async def test_confluence_connection() -> bool:
 @app.get("/api/dashboard/executive-summary")
 async def get_executive_summary():
     """Get executive dashboard summary with real MCP data"""
-    global dashboard_cache, cache_expiry
+    global dashboard_cache, cache_expiry, background_refresh_running, last_refresh_attempt
     
     # Always return cached data if available to prevent blocking
     if dashboard_cache:
         print("📊 Returning cached dashboard data")
-        # Trigger background refresh if cache is getting old (but don't wait)
-        if not cache_expiry or cache_expiry < datetime.now() + timedelta(minutes=30):
+        # Trigger background refresh if cache is getting old AND no refresh is running
+        should_refresh = (
+            not cache_expiry or 
+            cache_expiry < datetime.now() + timedelta(minutes=30)
+        )
+        
+        cooldown_check = (
+            not last_refresh_attempt or 
+            last_refresh_attempt < datetime.now() - timedelta(minutes=refresh_cooldown_minutes)
+        )
+        
+        if should_refresh and not background_refresh_running and cooldown_check:
             import asyncio
             asyncio.create_task(refresh_dashboard_data_background())
         return dashboard_cache
@@ -216,11 +231,23 @@ async def refresh_dashboard_data():
 
 async def refresh_dashboard_data_background():
     """Background refresh that doesn't block API responses"""
+    global background_refresh_running, last_refresh_attempt
+    
+    if background_refresh_running:
+        print("🔄 Background refresh already running, skipping...")
+        return
+    
     try:
+        background_refresh_running = True
+        last_refresh_attempt = datetime.now()
         print("🔄 Starting background data refresh...")
         await refresh_dashboard_data()
+        print("✅ Background refresh completed successfully")
     except Exception as e:
         print(f"🔄 Background refresh failed (non-blocking): {e}")
+        # Don't crash the app, just log the error
+    finally:
+        background_refresh_running = False
 
 async def fetch_jira_data() -> Dict[str, Any]:
     """Fetch comprehensive JIRA data"""
@@ -651,12 +678,28 @@ async def get_jira_tickets(project: str = None, status: str = None, assignee: st
                     failed_tickets.append(ticket)
                     continue
                 
-                # Check if ticket has failed deployments in confluence
-                ticket_key = ticket.get('key') or ticket.get('ticket_key', '')
-                if ticket_key:
-                    # This would need confluence data - for now use JIRA flag
-                    if 'failed' in ticket.get('description', '').lower() or 'failed' in ticket.get('summary', '').lower():
-                        failed_tickets.append(ticket)
+                # Check if ticket has test-related failures 
+                # Prioritize status-based matching for accuracy
+                status = (ticket.get('status') or '').lower()
+                
+                # Primary: Check status for test failure indicators
+                status_failure_patterns = [
+                    'test failed', 'testing failed', 'qa failed', 'level ii test failed',
+                    'failed testing', 'failed qa', 'test failure', 'testing failure', 'qa failure'
+                ]
+                
+                if any(pattern in status for pattern in status_failure_patterns):
+                    failed_tickets.append(ticket)
+                    continue
+                
+                # Secondary: Check summary for explicit test failure mentions (more conservative)
+                summary = (ticket.get('summary') or '').lower()
+                summary_failure_patterns = [
+                    'test failed', 'testing failed', 'qa failed', 'test failure', 'testing failure'
+                ]
+                
+                if any(pattern in summary for pattern in summary_failure_patterns):
+                    failed_tickets.append(ticket)
             filtered_tickets = failed_tickets
         
         # Format response to match frontend expectations
@@ -717,6 +760,41 @@ async def search_jira_tickets(query: str, limit: int = 25):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+
+@app.get("/api/jira/projects")
+async def get_jira_projects():
+    """Get all JIRA projects with metadata"""
+    try:
+        # Use cached MCP data if available
+        global mcp_data_cache
+        
+        if mcp_data_cache.get('jira_data'):
+            print("📊 Using cached JIRA data for projects")
+            jira_data = mcp_data_cache['jira_data']
+            projects = jira_data.get('projects', [])
+        else:
+            # No cache available - fetch directly from JIRA
+            print("⚠️ No cache available, fetching projects from JIRA...")
+            projects = await jira_connector.fetch_all_projects()
+        
+        # Transform projects data for frontend consumption
+        project_metadata = []
+        for project in projects:
+            project_info = {
+                'key': project.get('key', ''),
+                'name': project.get('name', project.get('key', '')),
+                'description': project.get('description', ''),
+                'lead': project.get('lead', ''),
+                'project_type': project.get('project_type', 'unknown')
+            }
+            project_metadata.append(project_info)
+        
+        return {
+            "projects": project_metadata,
+            "total_count": len(project_metadata)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch projects: {str(e)}")
 
 # Alerts Endpoints  
 @app.get("/api/alerts/")
@@ -1078,7 +1156,7 @@ async def get_deployment_analysis():
         deployment_list = deployments["deployments"]
         
         total = len(deployment_list)
-        failed = deployments["failed_count"]
+        failed = deployments["summary"]["failed_deployments"]
         success_rate = round(((total - failed) / max(1, total)) * 100, 1)
         
         return {

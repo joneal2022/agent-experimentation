@@ -25,6 +25,12 @@ class TempoMCPConnector:
             }
         )
         
+        # Add simple time-based caching to reduce API calls
+        self._team_cache = {}
+        self._account_cache = {}
+        self._cache_expiry = {}
+        self._cache_duration = timedelta(minutes=30)  # Cache for 30 minutes
+        
     async def connect(self) -> bool:
         """Test connection to Tempo API"""
         try:
@@ -83,7 +89,8 @@ class TempoMCPConnector:
             return all_worklogs
             
         except Exception as e:
-            logger.error("Failed to fetch Tempo worklogs", error=str(e))
+            error_msg = str(e) if str(e) else f"{type(e).__name__}: Unknown Tempo API error"
+            logger.error("Failed to fetch Tempo worklogs", error=error_msg)
             return []
     
     async def _extract_worklog_data(self, worklog: Dict[str, Any]) -> Dict[str, Any]:
@@ -119,7 +126,15 @@ class TempoMCPConnector:
             return {}
     
     async def fetch_teams(self) -> List[Dict[str, Any]]:
-        """Fetch all Tempo teams"""
+        """Fetch all Tempo teams with caching to reduce API calls"""
+        # Check cache first
+        cache_key = "teams"
+        if (cache_key in self._team_cache and 
+            cache_key in self._cache_expiry and 
+            self._cache_expiry[cache_key] > datetime.now()):
+            logger.info("Using cached Tempo teams data")
+            return self._team_cache[cache_key]
+        
         try:
             response = await self.http_client.get(f"{self.base_url}/teams")
             response.raise_for_status()
@@ -133,17 +148,22 @@ class TempoMCPConnector:
                     'team_id': team.get('id'),
                     'team_name': team.get('name'),
                     'team_lead': team.get('lead', {}).get('displayName') if team.get('lead') else None,
-                    'members': await self._fetch_team_members(team.get('id')),
+                    'members': await self._fetch_team_members_cached(team.get('id')),
                     'permissions': team.get('permissions', {}),
                     'raw_data': team
                 }
                 team_data.append(team_info)
             
+            # Cache the result
+            self._team_cache[cache_key] = team_data
+            self._cache_expiry[cache_key] = datetime.now() + self._cache_duration
+            
             logger.info("Fetched Tempo teams", count=len(team_data))
             return team_data
             
         except Exception as e:
-            logger.error("Failed to fetch Tempo teams", error=str(e))
+            error_msg = str(e) if str(e) else f"{type(e).__name__}: Unknown Tempo API error"
+            logger.error("Failed to fetch Tempo teams", error=error_msg)
             return []
     
     async def _fetch_team_members(self, team_id: int) -> List[Dict[str, Any]]:
@@ -171,11 +191,37 @@ class TempoMCPConnector:
             return member_data
             
         except Exception as e:
-            logger.error("Failed to fetch team members", team_id=team_id, error=str(e))
+            error_msg = str(e) if str(e) else f"{type(e).__name__}: Unknown Tempo API error"
+            logger.error("Failed to fetch team members", team_id=team_id, error=error_msg)
             return []
     
+    async def _fetch_team_members_cached(self, team_id: int) -> List[Dict[str, Any]]:
+        """Fetch team members with caching to reduce API calls"""
+        cache_key = f"team_members_{team_id}"
+        
+        # Check cache first
+        if (cache_key in self._team_cache and 
+            cache_key in self._cache_expiry and 
+            self._cache_expiry[cache_key] > datetime.now()):
+            return self._team_cache[cache_key]
+        
+        # Fetch and cache
+        members = await self._fetch_team_members(team_id)
+        self._team_cache[cache_key] = members
+        self._cache_expiry[cache_key] = datetime.now() + self._cache_duration
+        
+        return members
+    
     async def fetch_accounts(self) -> List[Dict[str, Any]]:
-        """Fetch all Tempo accounts for billing"""
+        """Fetch all Tempo accounts for billing with caching"""
+        # Check cache first
+        cache_key = "accounts"
+        if (cache_key in self._account_cache and 
+            cache_key in self._cache_expiry and 
+            self._cache_expiry[cache_key] > datetime.now()):
+            logger.info("Using cached Tempo accounts data")
+            return self._account_cache[cache_key]
+        
         try:
             response = await self.http_client.get(f"{self.base_url}/accounts")
             response.raise_for_status()
@@ -210,11 +256,16 @@ class TempoMCPConnector:
                 }
                 account_data.append(account_info)
             
+            # Cache the result
+            self._account_cache[cache_key] = account_data
+            self._cache_expiry[cache_key] = datetime.now() + self._cache_duration
+            
             logger.info("Fetched Tempo accounts", count=len(account_data))
             return account_data
             
         except Exception as e:
-            logger.error("Failed to fetch Tempo accounts", error=str(e))
+            error_msg = str(e) if str(e) else f"{type(e).__name__}: Unknown Tempo API error"
+            logger.error("Failed to fetch Tempo accounts", error=error_msg)
             return []
     
     async def fetch_timesheets(self, days_back: int = 30) -> List[Dict[str, Any]]:
