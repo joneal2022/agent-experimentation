@@ -16,7 +16,7 @@ class TempoMCPConnector:
     """Enhanced Tempo connector with MCP integration"""
     
     def __init__(self):
-        self.base_url = "https://api.tempo.io/4"
+        self.base_url = "https://api.eu.tempo.io/4"
         self.http_client = httpx.AsyncClient(
             timeout=30.0,
             headers={
