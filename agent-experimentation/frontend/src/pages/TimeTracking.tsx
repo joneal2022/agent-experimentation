@@ -13,9 +13,25 @@ interface TimeTrackingData {
   statistics: any;
 }
 
+interface TeamMemberBreakdown {
+  name: string;
+  total_hours: number;
+  billable_hours: number;
+  tickets_worked: string[];
+  ticket_count: number;
+  ticket_details: Array<{
+    key: string;
+    summary: string;
+    hours: number;
+  }>;
+}
+
 const TimeTracking: React.FC = () => {
   const [data, setData] = useState<TimeTrackingData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [authors, setAuthors] = useState<string[]>([]);
+  const [projects, setProjects] = useState<string[]>([]);
+  const [teamBreakdown, setTeamBreakdown] = useState<TeamMemberBreakdown[]>([]);
   const [filters, setFilters] = useState({
     days_back: 30,
     author: '',
@@ -24,7 +40,33 @@ const TimeTracking: React.FC = () => {
 
   useEffect(() => {
     loadTimeTrackingData();
+    loadDropdownData();
+    loadTeamBreakdown();
   }, [filters]);
+
+  const loadDropdownData = async () => {
+    try {
+      const [authorsResponse, projectsResponse] = await Promise.all([
+        api.get('/api/tempo/authors'),
+        api.get('/api/tempo/projects'),
+      ]);
+      setAuthors(authorsResponse.data.authors || []);
+      setProjects(projectsResponse.data.projects || []);
+    } catch (error) {
+      console.error('Failed to load dropdown data:', error);
+    }
+  };
+
+  const loadTeamBreakdown = async () => {
+    try {
+      const response = await api.get('/api/tempo/team-member-breakdown', { 
+        params: { days_back: filters.days_back } 
+      });
+      setTeamBreakdown(response.data.team_members || []);
+    } catch (error) {
+      console.error('Failed to load team breakdown:', error);
+    }
+  };
 
   const loadTimeTrackingData = async () => {
     try {
@@ -49,6 +91,14 @@ const TimeTracking: React.FC = () => {
     }
   };
 
+  const refreshAllData = async () => {
+    await Promise.all([
+      loadTimeTrackingData(),
+      loadTeamBreakdown(),
+      loadDropdownData()
+    ]);
+  };
+
   const COLORS = ['#3b82f6', '#ef4444', '#f59e0b', '#22c55e', '#8b5cf6'];
 
   return (
@@ -57,7 +107,7 @@ const TimeTracking: React.FC = () => {
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold text-gray-900">Time Tracking & Productivity</h1>
         <button
-          onClick={loadTimeTrackingData}
+          onClick={refreshAllData}
           disabled={loading}
           className="btn btn-primary disabled:opacity-50"
         >
@@ -134,26 +184,36 @@ const TimeTracking: React.FC = () => {
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Author
             </label>
-            <input
-              type="text"
+            <select
               value={filters.author}
               onChange={(e) => setFilters({ ...filters, author: e.target.value })}
-              placeholder="Filter by author"
               className="w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500"
-            />
+            >
+              <option value="">All Authors</option>
+              {authors.map((author) => (
+                <option key={author} value={author}>
+                  {author}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Project
             </label>
-            <input
-              type="text"
+            <select
               value={filters.project}
               onChange={(e) => setFilters({ ...filters, project: e.target.value })}
-              placeholder="e.g. PIH, CMDR"
               className="w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500"
-            />
+            >
+              <option value="">All Projects</option>
+              {projects.map((project) => (
+                <option key={project} value={project}>
+                  {project}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div className="flex items-end">
@@ -178,7 +238,7 @@ const TimeTracking: React.FC = () => {
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={Object.entries(data.utilization.utilization_by_user).slice(0, 8).map(([user, data]: [string, any]) => ({
-                  user: user.split(' ')[0], // First name only for space
+                  user: user, // Full name for better readability
                   utilization: data.utilization_percentage,
                   target: 100
                 }))}>
@@ -223,6 +283,91 @@ const TimeTracking: React.FC = () => {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Team Member Breakdown */}
+      {teamBreakdown.length > 0 && (
+        <div className="card">
+          <div className="card-header">
+            <h3 className="text-lg font-semibold text-gray-900">Team Member Breakdown</h3>
+            <p className="text-sm text-gray-500">Top 10 team members by hours logged in the last {filters.days_back} days</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Team Member
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Total Hours
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Billable Hours
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Tickets Worked
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Top Tickets
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {teamBreakdown.map((member, index) => (
+                  <tr key={index} className="hover:bg-gray-50">
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex items-center">
+                        <div className="flex-shrink-0 h-8 w-8">
+                          <div className="h-8 w-8 rounded-full bg-blue-500 flex items-center justify-center">
+                            <span className="text-sm font-medium text-white">
+                              {member.name.split(' ').map(n => n[0]).join('').substring(0, 2)}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="ml-4">
+                          <div className="text-sm font-medium text-gray-900">{member.name}</div>
+                          <div className="text-xs text-gray-500">{member.ticket_count} tickets</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm font-semibold text-gray-900">{member.total_hours}h</div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm font-semibold text-green-600">{member.billable_hours}h</div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm text-gray-900">{member.ticket_count} tickets</div>
+                      <div className="text-xs text-gray-500">
+                        {member.tickets_worked.slice(0, 3).join(', ')}
+                        {member.tickets_worked.length > 3 && ` +${member.tickets_worked.length - 3} more`}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="space-y-1">
+                        {member.ticket_details.slice(0, 2).map((ticket, ticketIndex) => (
+                          <div key={ticketIndex} className="text-xs">
+                            <span className="font-medium text-primary-600">{ticket.key}</span>
+                            <span className="text-gray-600 ml-1">({ticket.hours}h)</span>
+                            <div className="text-gray-500 truncate max-w-xs" title={ticket.summary}>
+                              {ticket.summary.length > 40 ? `${ticket.summary.substring(0, 40)}...` : ticket.summary}
+                            </div>
+                          </div>
+                        ))}
+                        {member.ticket_details.length > 2 && (
+                          <div className="text-xs text-gray-400">
+                            +{member.ticket_details.length - 2} more tickets
+                          </div>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
@@ -317,6 +462,7 @@ const TimeTracking: React.FC = () => {
           )}
         </div>
       )}
+
 
       {/* Statistics */}
       {data?.statistics && (

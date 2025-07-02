@@ -192,11 +192,19 @@ async def refresh_dashboard_data():
         # Fetch data from all sources in parallel
         tasks = [
             fetch_jira_data(),
-            fetch_tempo_data(),
+            asyncio.sleep(0),  # Placeholder for tempo - will fetch after JIRA
             fetch_confluence_data()
         ]
         
-        jira_data, tempo_data, confluence_data = await asyncio.gather(*tasks, return_exceptions=True)
+        jira_data, tempo_placeholder, confluence_data = await asyncio.gather(
+            fetch_jira_data(),
+            asyncio.sleep(0),  # Placeholder to maintain structure
+            fetch_confluence_data(),
+            return_exceptions=True
+        )
+        
+        # Now fetch Tempo data with JIRA enrichment
+        tempo_data = await fetch_tempo_data(jira_data if not isinstance(jira_data, Exception) else None)
         
         # Handle any exceptions
         if isinstance(jira_data, Exception):
@@ -279,15 +287,31 @@ async def fetch_jira_data() -> Dict[str, Any]:
         'project_health': project_health
     }
 
-async def fetch_tempo_data() -> Dict[str, Any]:
-    """Fetch comprehensive Tempo data"""
+async def fetch_tempo_data(jira_data: Dict[str, Any] = None) -> Dict[str, Any]:
+    """Fetch comprehensive Tempo data with JIRA enrichment"""
     print("⏱️ Fetching Tempo data...")
+    
+    # Create JIRA mappings if JIRA data is available
+    jira_mappings = None
+    if jira_data:
+        tickets = jira_data.get('tickets', [])
+        # Create issue ID to ticket key mapping
+        issue_mapping = jira_connector.create_issue_id_to_key_mapping(tickets)
+        # Create account ID to display name mapping
+        user_mapping = jira_connector.create_account_id_to_name_mapping(tickets)
+        
+        jira_mappings = {
+            'issue_mapping': issue_mapping,
+            'user_mapping': user_mapping
+        }
+        
+        print(f"📊 Created JIRA mappings: {len(issue_mapping)} issues, {len(user_mapping)} users")
     
     # Fetch productivity metrics
     metrics = await tempo_connector.get_productivity_metrics(days_back=30)
     
-    # Fetch recent worklogs
-    worklogs = await tempo_connector.fetch_worklogs(days_back=30)
+    # Fetch recent worklogs with JIRA enrichment
+    worklogs = await tempo_connector.fetch_worklogs(days_back=30, jira_mappings=jira_mappings)
     
     # Fetch teams and accounts
     teams = await tempo_connector.fetch_teams()
@@ -971,24 +995,59 @@ async def get_business_metrics():
         summary = await get_executive_summary()
         kpis = summary.get('kpis', {})
         
+        # Use cached JIRA data instead of making new API call
+        project_distribution = {}
+        if mcp_data_cache.get('jira_data'):
+            tickets = mcp_data_cache['jira_data'].get('tickets', [])
+            for ticket in tickets:
+                if ticket.get('is_stalled', False):
+                    project_key = ticket.get('project_key', 'Unknown')
+                    project_distribution[project_key] = project_distribution.get(project_key, 0) + 1
+        
+        # Calculate risk scores on 1-10 scale (higher = worse)
+        total_tickets = max(1, kpis.get('total_tickets', 1))
+        stalled_tickets = kpis.get('stalled_tickets', 0)
+        overdue_tickets = kpis.get('overdue_tickets', 0)
+        level_ii_failed = kpis.get('level_ii_failed_tickets', 0)
+        failed_deployments = kpis.get('failed_deployments', 0)
+        
+        # Delivery risk: stalled + overdue + level II failures (all cause delivery delays)
+        delivery_issues = stalled_tickets + overdue_tickets + level_ii_failed
+        delivery_risk_score = min(10, round((delivery_issues / total_tickets) * 10, 1))
+        
+        # Quality risk: deployment failures + level II failures (both indicate quality issues)
+        # Level II failures indicate poor development quality, deployment failures indicate production issues
+        quality_issues_score = (failed_deployments * 2.5) + (level_ii_failed / total_tickets * 5)
+        quality_risk_score = min(10, round(quality_issues_score, 1))
+        
+        # Utilization score: optimal is 80-100%, higher is better on 1-10 scale
+        team_utilization = kpis.get('team_utilization', 80)
+        if 80 <= team_utilization <= 100:
+            utilization_score = 10 - abs(90 - team_utilization) / 10  # Optimal around 90%
+        else:
+            utilization_score = max(1, 10 - abs(90 - team_utilization) / 5)  # Penalize deviation
+        utilization_score = round(utilization_score, 1)
+        
         return {
-            "delivery_performance": {
+            "delivery_metrics": {
+                "delivery_risk_score": delivery_risk_score,  # Scale 1-10: higher = worse delivery risk
                 "total_tickets": kpis.get('total_tickets', 0),
-                "completed_tickets": max(0, kpis.get('total_tickets', 0) - kpis.get('stalled_tickets', 0)),
-                "stalled_tickets": kpis.get('stalled_tickets', 0),
-                "overdue_tickets": kpis.get('overdue_tickets', 0)
+                "completed_tickets": max(0, kpis.get('total_tickets', 0) - delivery_issues),
+                "stalled_tickets": stalled_tickets,
+                "overdue_tickets": overdue_tickets,
+                "level_ii_failed_tickets": level_ii_failed
             },
             "quality_metrics": {
-                "failed_deployments": kpis.get('failed_deployments', 0),
-                "deployment_success_rate": max(0, 100 - (kpis.get('failed_deployments', 0) * 10))
+                "quality_risk_score": quality_risk_score,  # Scale 1-10: higher = worse quality risk
+                "failed_deployments": failed_deployments,
+                "level_ii_failed_tickets": level_ii_failed,
+                "deployment_success_rate": max(0, round(10 - quality_risk_score, 1))
             },
-            "team_performance": {
-                "utilization": kpis.get('team_utilization', 0),
-                "productivity_score": min(100, kpis.get('team_utilization', 0) + 10)
-            },
-            "risk_assessment": {
-                "delivery_risk": kpis.get('delivery_risk_score', 1),
-                "client_satisfaction": kpis.get('client_satisfaction_score', 8.0)
+            "resource_metrics": {
+                "utilization_score": utilization_score,  # Scale 1-10: higher = better utilization
+                "utilization": round(team_utilization, 1),
+                "productivity_score": utilization_score,  # Scale 1-10: higher = better productivity
+                "project_distribution": project_distribution
             }
         }
     except Exception as e:
@@ -1005,11 +1064,23 @@ async def get_client_impact():
         high_risk = [p for p in project_health if p.get('risk_level') == 'high']
         medium_risk = [p for p in project_health if p.get('risk_level') == 'medium']
         
+        # Create client data array for the table
+        clients = []
+        for project in project_health:
+            client_data = {
+                "client_name": project.get('project_key', 'Unknown'),
+                "overdue_tickets": project.get('overdue_tickets', 0),
+                "failed_deployments": project.get('failed_deployments', 0),
+                "overall_risk": project.get('risk_level', 'low')
+            }
+            clients.append(client_data)
+        
         return {
-            "high_impact_clients": len(high_risk),
-            "medium_impact_clients": len(medium_risk),
+            "high_risk_clients": len(high_risk),
+            "medium_risk_clients": len(medium_risk),
             "at_risk_projects": [p['project_key'] for p in high_risk],
-            "total_affected_tickets": sum(p.get('stalled_tickets', 0) + p.get('overdue_tickets', 0) for p in high_risk)
+            "total_affected_tickets": sum(p.get('stalled_tickets', 0) + p.get('overdue_tickets', 0) for p in high_risk),
+            "clients": clients
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch client impact: {str(e)}")
@@ -1018,15 +1089,83 @@ async def get_client_impact():
 async def get_team_performance():
     """Get team performance metrics"""
     try:
-        # Fetch tempo data for team metrics
-        tempo_data = await fetch_tempo_data()
-        metrics = tempo_data.get('productivity_metrics', {})
+        # Use cached Tempo data instead of making new API call
+        worklogs = []
+        if mcp_data_cache.get('tempo_data'):
+            worklogs = mcp_data_cache['tempo_data'].get('worklogs', [])
+        
+        # Calculate individual team member performance
+        user_performance = {}
+        for log in worklogs:
+            user_id = log.get('author_account_id')
+            if user_id:
+                # Use display name if available, otherwise use account ID as fallback
+                display_name = log.get('author_display_name') or user_id.split(':')[-1][:8]  # Use last part of account ID
+                
+                if user_id not in user_performance:
+                    user_performance[user_id] = {
+                        "team_member": display_name,
+                        "hours_logged": 0,
+                        "tickets_worked": set(),
+                        "projects_worked": set()
+                    }
+                user_performance[user_id]["hours_logged"] += log.get('time_spent_hours', 0)
+                if log.get('jira_ticket_key'):
+                    user_performance[user_id]["tickets_worked"].add(log.get('jira_ticket_key'))
+                    # Extract project from ticket key
+                    project_key = log.get('jira_ticket_key', '').split('-')[0]
+                    if project_key:
+                        user_performance[user_id]["projects_worked"].add(project_key)
+        
+        # Convert to performance scores (1-10 scale) with variation
+        team_performance = []
+        total_performance = 0
+        members_needing_support = 0
+        
+        for user_data in user_performance.values():
+            hours = user_data["hours_logged"]
+            tickets = len(user_data["tickets_worked"])
+            projects = len(user_data["projects_worked"])
+            
+            # Performance scoring on 1-10 scale with different factors for variation
+            # Hours component (40% weight): based on expected 40 hours/month
+            hours_component = min(10, (hours / 40) * 10) * 0.4
+            
+            # Ticket variety component (40% weight): based on expected 10 tickets/month
+            ticket_component = min(10, (tickets / 10) * 10) * 0.4
+            
+            # Project diversity component (20% weight): bonus for working on multiple projects
+            project_component = min(10, projects * 2) * 0.2
+            
+            performance_score = max(1, hours_component + ticket_component + project_component)
+            
+            if performance_score < 5:
+                members_needing_support += 1
+            
+            team_performance.append({
+                "team_member": user_data["team_member"],
+                "performance_score": round(performance_score, 1),
+                "hours_logged": round(hours, 1),
+                "tickets_count": tickets
+            })
+            total_performance += performance_score
+        
+        avg_performance = total_performance / max(1, len(team_performance))
         
         return {
-            "total_hours_logged": metrics.get('total_hours_logged', 0),
-            "unique_contributors": metrics.get('unique_contributors', 0),
-            "average_hours_per_contributor": round(metrics.get('total_hours_logged', 0) / max(1, metrics.get('unique_contributors', 1)), 1),
-            "team_utilization_percentage": min(100, round((metrics.get('total_hours_logged', 0) / max(1, metrics.get('unique_contributors', 1) * 160)), 1) * 100)
+            "team_performance": sorted(team_performance, key=lambda x: x["performance_score"], reverse=True),
+            "team_members_analyzed": len(team_performance),
+            "summary": {
+                "members_needing_support": members_needing_support,
+                "average_performance_score": round(avg_performance, 1),
+                "top_performer": team_performance[0]["team_member"] if team_performance else "N/A"
+            },
+            "recommendations": [
+                f"Analyzed {len(team_performance)} team members",
+                f"Average performance score: {round(avg_performance, 1)}/10",
+                f"{members_needing_support} members may need additional support",
+                "Consider workload redistribution for optimal performance"
+            ]
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch team performance: {str(e)}")
@@ -1036,8 +1175,15 @@ async def get_team_performance():
 async def get_deployments(days_back: int = 30, failed_only: bool = False):
     """Get deployment records from Confluence"""
     try:
-        confluence_data = await fetch_confluence_data()
-        deployments = confluence_data.get('deployments', [])
+        # Use cached Confluence data instead of making new API call
+        print("📊 Using cached Confluence data for deployments")
+        deployments = []
+        if mcp_data_cache.get('confluence_data'):
+            deployments = mcp_data_cache['confluence_data'].get('deployment_records', [])
+        else:
+            print("📚 No cached Confluence data, fetching from API...")
+            confluence_data = await fetch_confluence_data()
+            deployments = confluence_data.get('deployments', [])
         
         # Process deployment data for API response - with frontend format
         processed_deployments = []
@@ -1171,56 +1317,328 @@ async def get_deployment_analysis():
 
 # Tempo/Time Tracking Endpoints
 @app.get("/api/tempo/worklogs")
-async def get_tempo_worklogs(days_back: int = 30):
+async def get_tempo_worklogs(days_back: int = 30, author: str = "", project: str = ""):
     """Get Tempo worklogs"""
     try:
-        worklogs = await tempo_connector.fetch_worklogs(days_back=days_back)
+        # Use cached Tempo data instead of making new API call
+        print("📊 Using cached Tempo data for worklogs")
+        worklogs = []
+        if mcp_data_cache.get('tempo_data'):
+            worklogs = mcp_data_cache['tempo_data'].get('worklogs', [])
+        else:
+            print("⏱️ No cached Tempo data, fetching from API...")
+            worklogs = await tempo_connector.fetch_worklogs(days_back=days_back)
+        
+        # Apply filters
+        filtered_worklogs = worklogs
+        if author:
+            filtered_worklogs = [w for w in filtered_worklogs if author.lower() in (w.get('author_display_name', '') or '').lower()]
+        if project:
+            filtered_worklogs = [w for w in filtered_worklogs if project.upper() in (w.get('jira_ticket_key', '') or '').upper()]
+        
+        # Calculate summary data
+        total_hours = sum(log.get('time_spent_hours', 0) for log in filtered_worklogs)
+        unique_contributors = len(set(log.get('author_account_id') for log in filtered_worklogs if log.get('author_account_id')))
+        
         return {
-            "worklogs": worklogs,
-            "total_count": len(worklogs),
-            "date_range_days": days_back
+            "worklogs": filtered_worklogs,
+            "summary": {
+                "total_hours_logged": round(total_hours, 1),
+                "unique_contributors": unique_contributors,
+                "total_entries": len(filtered_worklogs),
+                "date_range_days": days_back
+            }
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch worklogs: {str(e)}")
 
 @app.get("/api/tempo/utilization-report")
-async def get_utilization_report():
+async def get_utilization_report(days_back: int = 30):
     """Get team utilization report"""
     try:
-        tempo_data = await fetch_tempo_data()
-        metrics = tempo_data.get('productivity_metrics', {})
-        teams = tempo_data.get('teams', [])
+        # Use cached Tempo data instead of making new API call
+        print("📊 Using cached Tempo data for utilization report")
+        worklogs = []
+        if mcp_data_cache.get('tempo_data'):
+            worklogs = mcp_data_cache['tempo_data'].get('worklogs', [])
+        else:
+            print("⏱️ No cached Tempo data, fetching from API...")
+            jira_data = mcp_data_cache.get('jira_data') if mcp_data_cache else None
+            tempo_data = await fetch_tempo_data(jira_data)
+            worklogs = tempo_data.get('worklogs', [])
+        
+        # Calculate utilization by user
+        user_hours = {}
+        user_names = {}
+        for log in worklogs:
+            user_id = log.get('author_account_id')
+            if user_id:
+                user_hours[user_id] = user_hours.get(user_id, 0) + log.get('time_spent_hours', 0)
+                if log.get('author_display_name'):
+                    user_names[user_id] = log.get('author_display_name')
+        
+        # Calculate utilization percentages (assuming 40 hours/week standard)
+        expected_hours_per_week = 40
+        weeks_in_period = days_back / 7
+        expected_total_hours = expected_hours_per_week * weeks_in_period
+        
+        utilization_by_user = {}
+        total_utilization = 0
+        billable_hours = 0
+        
+        for user_id, hours in user_hours.items():
+            utilization_pct = (hours / expected_total_hours) * 100
+            utilization_by_user[user_names.get(user_id, user_id)] = {
+                "utilization_percentage": round(utilization_pct, 1),
+                "hours_logged": round(hours, 1),
+                "expected_hours": round(expected_total_hours, 1)
+            }
+            total_utilization += utilization_pct
+            billable_hours += hours
+        
+        avg_utilization = total_utilization / max(1, len(user_hours))
+        
+        # Count utilization categories
+        underutilized = sum(1 for data in utilization_by_user.values() if data["utilization_percentage"] < 80)
+        optimal = sum(1 for data in utilization_by_user.values() if 80 <= data["utilization_percentage"] <= 110)
+        overutilized = sum(1 for data in utilization_by_user.values() if data["utilization_percentage"] > 110)
         
         return {
-            "total_hours": metrics.get('total_hours_logged', 0),
-            "contributors": metrics.get('unique_contributors', 0),
-            "teams": len(teams),
-            "utilization_percentage": min(100, round((metrics.get('total_hours_logged', 0) / max(1, metrics.get('unique_contributors', 1) * 160)) * 100, 1)),
-            "teams_data": teams[:10]  # Limit response size
+            "utilization_by_user": utilization_by_user,
+            "team_summary": {
+                "average_utilization": round(avg_utilization, 1),
+                "total_billable_hours": round(billable_hours, 1),
+                "total_members": len(user_hours),
+                "underutilized_members": underutilized,
+                "optimal_utilization_members": optimal,
+                "overutilized_members": overutilized
+            },
+            "recommendations": [
+                f"Total team members analyzed: {len(user_hours)}",
+                f"Average utilization: {round(avg_utilization, 1)}%",
+                f"Members under-utilized (<80%): {underutilized}",
+                f"Members optimally utilized (80-110%): {optimal}",
+                f"Members over-utilized (>110%): {overutilized}"
+            ]
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate utilization report: {str(e)}")
+
+@app.get("/api/tempo/authors")
+async def get_tempo_authors():
+    """Get list of authors for dropdown filters"""
+    try:
+        # Use cached Tempo data, fallback to fresh data
+        worklogs = []
+        if mcp_data_cache.get('tempo_data'):
+            worklogs = mcp_data_cache['tempo_data'].get('worklogs', [])
+            print(f"📊 Using cached Tempo data for authors, found {len(worklogs)} worklogs")
+        else:
+            print("⏱️ No cached Tempo data, fetching fresh worklogs for authors...")
+            worklogs = await tempo_connector.fetch_worklogs(days_back=30)
+        
+        author_set = set()
+        for log in worklogs:
+            if log.get('author_display_name'):
+                author_set.add(log.get('author_display_name'))
+        authors = sorted(list(author_set))
+        
+        print(f"📊 Found {len(authors)} unique authors: {authors[:5]}...")
+        return {"authors": authors}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch authors: {str(e)}")
+
+@app.get("/api/tempo/projects")
+async def get_tempo_projects():
+    """Get list of projects for dropdown filters"""
+    try:
+        # Use cached Tempo data, fallback to fresh data
+        worklogs = []
+        if mcp_data_cache.get('tempo_data'):
+            worklogs = mcp_data_cache['tempo_data'].get('worklogs', [])
+            print(f"📊 Using cached Tempo data for projects, found {len(worklogs)} worklogs")
+        else:
+            print("⏱️ No cached Tempo data, fetching fresh worklogs for projects...")
+            worklogs = await tempo_connector.fetch_worklogs(days_back=30)
+        
+        project_set = set()
+        for log in worklogs:
+            if log.get('jira_ticket_key'):
+                project_key = log.get('jira_ticket_key', '').split('-')[0]
+                if project_key:
+                    project_set.add(project_key)
+        projects = sorted(list(project_set))
+        
+        print(f"📊 Found {len(projects)} unique projects: {projects[:10]}...")
+        return {"projects": projects}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch projects: {str(e)}")
 
 @app.get("/api/tempo/statistics")
 async def get_tempo_statistics():
     """Get Tempo statistics"""
     try:
-        tempo_data = await fetch_tempo_data()
-        worklogs = tempo_data.get('worklogs', [])
+        # Use cached Tempo data instead of making new API call
+        print("📊 Using cached Tempo data for statistics")
+        worklogs = []
+        teams = []
+        if mcp_data_cache.get('tempo_data'):
+            worklogs = mcp_data_cache['tempo_data'].get('worklogs', [])
+            teams = mcp_data_cache['tempo_data'].get('teams', [])
+        else:
+            print("⏱️ No cached Tempo data, fetching from API...")
+            jira_data = mcp_data_cache.get('jira_data') if mcp_data_cache else None
+            tempo_data = await fetch_tempo_data(jira_data)
+            worklogs = tempo_data.get('worklogs', [])
+            teams = tempo_data.get('teams', [])
         
-        # Calculate basic statistics
-        total_hours = sum(log.get('timeSpentSeconds', 0) / 3600 for log in worklogs)
-        unique_users = len(set(log.get('author', {}).get('accountId', '') for log in worklogs))
+        # Calculate statistics from the Tempo connector data
+        total_hours = sum(log.get('time_spent_hours', 0) for log in worklogs)
+        unique_users = len(set(log.get('author_account_id', '') for log in worklogs if log.get('author_account_id')))
+        
+        # Filter worklogs from last 30 days
+        from datetime import datetime, timedelta
+        cutoff_date = datetime.now() - timedelta(days=30)
+        recent_worklogs = []
+        total_hours_30_days = 0
+        
+        for log in worklogs:
+            try:
+                log_date = datetime.fromisoformat(log.get('start_date', '').replace('T00:00:00', ''))
+                if log_date >= cutoff_date:
+                    recent_worklogs.append(log)
+                    total_hours_30_days += log.get('time_spent_hours', 0)
+            except:
+                pass
         
         return {
-            "total_hours_logged": round(total_hours, 1),
-            "unique_contributors": unique_users,
-            "total_entries": len(worklogs),
-            "average_hours_per_entry": round(total_hours / max(1, len(worklogs)), 2),
-            "average_hours_per_contributor": round(total_hours / max(1, unique_users), 1)
+            "worklogs": {
+                "total": len(worklogs),
+                "recent_30_days": len(recent_worklogs),
+                "total_hours_30_days": round(total_hours_30_days, 1),
+                "average_hours_per_entry": round(total_hours / max(1, len(worklogs)), 2)
+            },
+            "teams": {
+                "total": len(teams),
+                "active_members": unique_users
+            },
+            "contributors": {
+                "unique_total": unique_users,
+                "average_hours_per_contributor": round(total_hours / max(1, unique_users), 1)
+            }
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch statistics: {str(e)}")
+
+@app.get("/api/tempo/team-member-breakdown")
+async def get_team_member_breakdown(days_back: int = 30):
+    """Get detailed team member breakdown with tickets and billable hours"""
+    try:
+        # Use cached Tempo and JIRA data instead of making new API calls
+        print("📊 Using cached data for team member breakdown")
+        worklogs = []
+        jira_tickets = []
+        
+        if mcp_data_cache.get('tempo_data'):
+            worklogs = mcp_data_cache['tempo_data'].get('worklogs', [])
+        else:
+            print("⏱️ No cached Tempo data, fetching from API...")
+            jira_data = mcp_data_cache.get('jira_data') if mcp_data_cache else None
+            tempo_data = await fetch_tempo_data(jira_data)
+            worklogs = tempo_data.get('worklogs', [])
+        
+        if mcp_data_cache.get('jira_data'):
+            jira_tickets = mcp_data_cache['jira_data'].get('tickets', [])
+        else:
+            print("⏱️ No cached JIRA data, using empty tickets list...")
+            jira_tickets = []
+        
+        # Filter worklogs by date range
+        from datetime import datetime, timedelta
+        cutoff_date = datetime.now() - timedelta(days=days_back)
+        filtered_worklogs = []
+        
+        for log in worklogs:
+            try:
+                log_date = datetime.fromisoformat(log.get('start_date', '').replace('T00:00:00', ''))
+                if log_date >= cutoff_date:
+                    filtered_worklogs.append(log)
+            except:
+                # Include logs without valid dates to avoid missing data
+                filtered_worklogs.append(log)
+        
+        # Group by team member
+        team_members = {}
+        
+        for log in filtered_worklogs:
+            author_id = log.get('author_account_id')
+            author_name = log.get('author_display_name', 'Unknown')
+            ticket_key = log.get('jira_ticket_key', 'Unknown')
+            hours = log.get('time_spent_hours', 0)
+            
+            if author_id and author_name != 'Unknown':
+                if author_id not in team_members:
+                    team_members[author_id] = {
+                        'name': author_name,
+                        'total_hours': 0,
+                        'billable_hours': 0,
+                        'tickets': set(),
+                        'ticket_details': []
+                    }
+                
+                team_members[author_id]['total_hours'] += hours
+                team_members[author_id]['billable_hours'] += hours  # Assuming all logged hours are billable
+                
+                if ticket_key and ticket_key != 'Unknown':
+                    team_members[author_id]['tickets'].add(ticket_key)
+                    # Add ticket details if not already present
+                    if not any(t['key'] == ticket_key for t in team_members[author_id]['ticket_details']):
+                        # Find ticket summary from JIRA data
+                        ticket_summary = 'No summary available'
+                        for ticket in jira_tickets:
+                            if ticket.get('key') == ticket_key:
+                                ticket_summary = ticket.get('summary', 'No summary available')
+                                break
+                        
+                        team_members[author_id]['ticket_details'].append({
+                            'key': ticket_key,
+                            'summary': ticket_summary,
+                            'hours': hours
+                        })
+                    else:
+                        # Update hours for existing ticket
+                        for ticket_detail in team_members[author_id]['ticket_details']:
+                            if ticket_detail['key'] == ticket_key:
+                                ticket_detail['hours'] += hours
+                                break
+        
+        # Convert to list format and limit to top 10 team members by hours
+        breakdown_list = []
+        for author_id, data in team_members.items():
+            breakdown_list.append({
+                'name': data['name'],
+                'total_hours': round(data['total_hours'], 1),
+                'billable_hours': round(data['billable_hours'], 1),
+                'tickets_worked': list(data['tickets']),
+                'ticket_count': len(data['tickets']),
+                'ticket_details': sorted(data['ticket_details'], key=lambda x: x['hours'], reverse=True)
+            })
+        
+        # Sort by total hours and limit to top 10
+        breakdown_list.sort(key=lambda x: x['total_hours'], reverse=True)
+        top_10_members = breakdown_list[:10]
+        
+        return {
+            "team_members": top_10_members,
+            "summary": {
+                "total_members": len(breakdown_list),
+                "displaying_top": len(top_10_members),
+                "period_days": days_back
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate team member breakdown: {str(e)}")
 
 if __name__ == "__main__":
     uvicorn.run(

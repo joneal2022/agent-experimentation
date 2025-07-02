@@ -45,8 +45,8 @@ class TempoMCPConnector:
             logger.error(f"Failed to connect to Tempo: {e}")
             return False
     
-    async def fetch_worklogs(self, days_back: int = 30) -> List[Dict[str, Any]]:
-        """Fetch worklogs from the last N days"""
+    async def fetch_worklogs(self, days_back: int = 30, jira_mappings: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+        """Fetch worklogs from the last N days with JIRA data enrichment"""
         try:
             # Calculate date range
             end_date = datetime.now().date()
@@ -55,6 +55,12 @@ class TempoMCPConnector:
             all_worklogs = []
             offset = 0
             limit = 1000
+            
+            # Extract mappings from JIRA data if provided
+            issue_id_to_key = jira_mappings.get('issue_mapping', {}) if jira_mappings else {}
+            account_id_to_name = jira_mappings.get('user_mapping', {}) if jira_mappings else {}
+            
+            logger.info(f"Starting worklog fetch with {len(issue_id_to_key)} issue mappings and {len(account_id_to_name)} user mappings")
             
             while True:
                 params = {
@@ -76,7 +82,7 @@ class TempoMCPConnector:
                 
                 # Process each worklog
                 for worklog in worklogs:
-                    worklog_data = await self._extract_worklog_data(worklog)
+                    worklog_data = await self._extract_worklog_data(worklog, issue_id_to_key, account_id_to_name)
                     all_worklogs.append(worklog_data)
                 
                 # Check if we have more data
@@ -93,7 +99,7 @@ class TempoMCPConnector:
             logger.error("Failed to fetch Tempo worklogs", error=error_msg)
             return []
     
-    async def _extract_worklog_data(self, worklog: Dict[str, Any]) -> Dict[str, Any]:
+    async def _extract_worklog_data(self, worklog: Dict[str, Any], issue_id_to_key: Dict[str, str] = None, account_id_to_name: Dict[str, str] = None) -> Dict[str, Any]:
         """Extract comprehensive data from a Tempo worklog"""
         try:
             # Handle both dict and non-dict worklog objects
@@ -101,15 +107,45 @@ class TempoMCPConnector:
                 logger.error("Invalid worklog data type", worklog_type=type(worklog), worklog_id=worklog)
                 return {}
             
+            # Extract basic worklog info
+            jira_issue_id = worklog.get('issue', {}).get('id') if isinstance(worklog.get('issue'), dict) else None
+            author_account_id = worklog.get('author', {}).get('accountId') if isinstance(worklog.get('author'), dict) else None
+            
+            # Get JIRA ticket key from issue ID using real JIRA mapping
+            jira_ticket_key = None
+            if jira_issue_id and issue_id_to_key:
+                jira_ticket_key = issue_id_to_key.get(str(jira_issue_id))
+            
+            # If no mapping found, log it for debugging
+            if jira_issue_id and not jira_ticket_key:
+                logger.debug(f"No JIRA ticket key found for issue ID: {jira_issue_id}")
+            
+            # Get display name from JIRA mapping or worklog data
+            author_display_name = worklog.get('author', {}).get('displayName') if isinstance(worklog.get('author'), dict) else None
+            if not author_display_name and author_account_id and account_id_to_name:
+                author_display_name = account_id_to_name.get(author_account_id)
+            
+            # If still no display name, create a fallback
+            if not author_display_name and author_account_id:
+                account_parts = author_account_id.split(':')
+                if len(account_parts) > 1:
+                    author_display_name = f"User_{account_parts[-1][:8]}"
+                else:
+                    author_display_name = f"User_{author_account_id[:8]}"
+            
+            # Log missing mapping for debugging
+            if author_account_id and not author_display_name:
+                logger.debug(f"No display name found for account ID: {author_account_id}")
+            
             worklog_data = {
                 'tempo_worklog_id': worklog.get('tempoWorklogId'),
-                'jira_ticket_key': worklog.get('issue', {}).get('key') if isinstance(worklog.get('issue'), dict) else None,
-                'jira_ticket_id': worklog.get('issue', {}).get('id') if isinstance(worklog.get('issue'), dict) else None,
+                'jira_ticket_key': jira_ticket_key,
+                'jira_ticket_id': jira_issue_id,
                 'time_spent_seconds': worklog.get('timeSpentSeconds', 0),
                 'time_spent_hours': round(worklog.get('timeSpentSeconds', 0) / 3600, 2),
                 'billing_key': worklog.get('billableSeconds', {}).get('key') if isinstance(worklog.get('billableSeconds'), dict) else None,
-                'author_account_id': worklog.get('author', {}).get('accountId') if isinstance(worklog.get('author'), dict) else None,
-                'author_display_name': worklog.get('author', {}).get('displayName') if isinstance(worklog.get('author'), dict) else None,
+                'author_account_id': author_account_id,
+                'author_display_name': author_display_name,
                 'start_date': self._parse_tempo_date(worklog.get('startDate')),
                 'start_time': worklog.get('startTime'),
                 'description': worklog.get('description', ''),

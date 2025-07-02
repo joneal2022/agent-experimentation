@@ -298,6 +298,54 @@ class JiraMCPConnector:
             logger.error("Failed to get critical tickets", error=str(e))
             return []
     
+    async def get_user_by_account_id(self, account_id: str) -> Optional[Dict[str, Any]]:
+        """Get user details by account ID"""
+        try:
+            user = self.client.user(account_id)
+            return {
+                'account_id': user.accountId,
+                'display_name': user.displayName,
+                'email_address': getattr(user, 'emailAddress', None),
+                'active': user.active,
+                'time_zone': getattr(user, 'timeZone', None)
+            }
+        except Exception as e:
+            logger.error(f"Failed to get user details for {account_id}: {e}")
+            return None
+    
+    def create_issue_id_to_key_mapping(self, tickets: List[Dict[str, Any]]) -> Dict[str, str]:
+        """Create a mapping from issue ID to ticket key from JIRA tickets"""
+        mapping = {}
+        for ticket in tickets:
+            if 'raw_data' in ticket and 'id' in ticket['raw_data']:
+                issue_id = str(ticket['raw_data']['id'])
+                ticket_key = ticket.get('key', ticket.get('ticket_key', ''))
+                if ticket_key:
+                    mapping[issue_id] = ticket_key
+        return mapping
+    
+    def create_account_id_to_name_mapping(self, tickets: List[Dict[str, Any]]) -> Dict[str, str]:
+        """Create a mapping from account ID to display name from JIRA tickets"""
+        mapping = {}
+        for ticket in tickets:
+            # Get assignee account ID and name
+            if 'raw_data' in ticket and 'fields' in ticket['raw_data']:
+                fields = ticket['raw_data']['fields']
+                
+                # Process assignee
+                if fields.get('assignee'):
+                    assignee = fields['assignee']
+                    if isinstance(assignee, dict) and 'accountId' in assignee and 'displayName' in assignee:
+                        mapping[assignee['accountId']] = assignee['displayName']
+                
+                # Process reporter
+                if fields.get('reporter'):
+                    reporter = fields['reporter']
+                    if isinstance(reporter, dict) and 'accountId' in reporter and 'displayName' in reporter:
+                        mapping[reporter['accountId']] = reporter['displayName']
+        
+        return mapping
+    
     async def close(self):
         """Close the connector and clean up resources"""
         if self.http_client:
